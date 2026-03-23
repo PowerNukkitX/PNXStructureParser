@@ -1,26 +1,32 @@
 package org.powernukkitx.structureparser;
 
-import cn.nukkit.nbt.NBTIO;
-import cn.nukkit.nbt.stream.PGZIPOutputStream;
-import cn.nukkit.nbt.tag.*;
+import cn.nukkit.block.Block;
+import cn.nukkit.block.BlockState;
+import cn.nukkit.block.BlockUnknown;
 import cn.nukkit.level.structure.JeStructure;
+import cn.nukkit.nbt.NBTIO;
+import cn.nukkit.nbt.tag.*;
 import cn.nukkit.registry.Registries;
-import cn.nukkit.registry.mappings.BlockMappings;
+import cn.nukkit.registry.mappings.JeBlockState;
 import cn.nukkit.registry.mappings.MappingRegistries;
+import cn.nukkit.registry.mappings.populator.BlockRegistryPopulator;
+import lombok.SneakyThrows;
 
 import java.io.*;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 
 public class Main {
 
     /**
      * Recursively scans the folder and writes each NBT file into a nested CompoundTag.
      */
-    protected static void checkFolder(File folder, CompoundTag root) throws IOException {
+    @SneakyThrows
+    protected static void checkFolder(File folder, CompoundTag root) {
         CompoundTag tag = new CompoundTag();
         if(folder.isDirectory()) {
-            for(File file : folder.listFiles()) {
+            for(File file : Objects.requireNonNull(folder.listFiles())) {
                 checkFolder(file, tag);
             }
         } else {
@@ -31,17 +37,34 @@ public class Main {
                 int y = structure.getSizeY();
                 int z = structure.getSizeZ();
                 tag.putIntArray("size", new int[] {x, y, z});
-                tag.putBoolean("PNX", true);
                 List<Integer> palette = new ArrayList<>();
                 byte[] blocks = new byte[x*y*z];
-                for(JeStructure.StructureBlockInstance b : structure.getBlockInstances()) {
-                    int hash = b.block.state.blockStateHash();
+                ListTag<CompoundTag> jigsaw = new ListTag<>();
+                for(JeStructure.StructureBlockInstance instance : structure.getBlockInstances()) {
+                    JeStructure.StructureBlocks block = instance.block;
+                    int hash = block.state.blockStateHash();
+                    if(!block.compoundTag.isEmpty()) {
+                        if(block.compoundTag.getString("id").equals("minecraft:jigsaw")) {
+                            CompoundTag nbt = block.compoundTag.copy();
+                            if(folder.getName().contains("plains_fountain_01")) System.out.println(nbt);
+                            nbt.putIntArray("pos", new int[] {instance.x, instance.y, instance.z});
+                            nbt.remove("id");
+                            nbt.remove("joint");
+                            BlockState state = MappingRegistries.BLOCKS.getPNXBlock(new JeBlockState(nbt.getString("final_state")));
+                            if(state == null) {
+                                Block block1 = Registries.BLOCK.get(nbt.getString("final_state"));
+                                if(block1 != null) state = block1.getBlockState();
+                            };
+                            if(state == null) state = BlockUnknown.PROPERTIES.getDefaultState();
+                            nbt.putInt("final_state", state.blockStateHash());
+                            jigsaw.add(nbt);
+                        }
+                    }
                     if(!palette.contains(hash)) palette.add(hash);
                     int idx = palette.indexOf(hash);
-                    int index = b.x + (b.y * x) + (b.z * x * y);
+                    int index = instance.x + (instance.y * x) + (instance.z * x * y);
                     blocks[index] = (byte) (idx + 1);
                 }
-
                 if(palette.size() > 127) {
                     System.out.println("PALETTE BIGGER THAN 127");
                 }
@@ -51,32 +74,18 @@ public class Main {
                 }
                 tag.putList("palette", paletteTag);
                 tag.putByteArray("blocks", blocks);
+                if(jigsaw.size() > 0) tag.putList("jigsaw", jigsaw);
             } else System.err.println(folder.getName() + " is not an NBT file!");
         }
         root.putCompound(folder.getName().split("\\.")[0], tag);
     }
 
-    private static CompoundTag getOrCreateNestedTag(CompoundTag root, String[] path) {
-        CompoundTag current = root;
-        for (String part : path) {
-            if (!current.contains(part) || !(current.get(part) instanceof CompoundTag)) {
-                CompoundTag newTag = new CompoundTag();
-                current.put(part, newTag);
-                current = newTag;
-            } else {
-                current = (CompoundTag) current.get(part);
-            }
-        }
-        return current;
-    }
-
     // === Verification method unchanged ===
-    private static boolean verifyWrittenFile(String filename) {
+    private static boolean verifyWrittenFile(File file) {
         System.out.println("\n=== VERIFYING WRITTEN FILE ===");
-        File file = new File(filename);
 
         if (!file.exists()) {
-            System.err.println("✗ File does not exist: " + filename);
+            System.err.println("✗ File does not exist: " + file.getName());
             return false;
         }
 
@@ -112,7 +121,7 @@ public class Main {
 
         Registries.BLOCK.init();
         Registries.BLOCKSTATE.init();
-        BlockMappings map = MappingRegistries.BLOCKS; //load mappings
+        BlockRegistryPopulator.initMapping();
 
         System.out.println("=== SCANNING DIRECTORY: " + baseDir.getAbsolutePath() + " ===");
         CompoundTag root = new CompoundTag();
@@ -125,27 +134,17 @@ public class Main {
             System.err.println("No structures found! Aborting write.");
             return;
         }
-
-        String outputFile = "structures.nbt";
-        try (ByteArrayOutputStream baos = new ByteArrayOutputStream();
-             PGZIPOutputStream gzip = new PGZIPOutputStream(baos)) {
-
-            NBTIO.write(root, gzip);
-            gzip.finish();
-
-            try (FileOutputStream fos = new FileOutputStream(outputFile)) {
-                fos.write(baos.toByteArray());
-                fos.flush();
-            }
+        File output = new File("structures.nbt");
+        try {
+            if(output.exists()) output.createNewFile();
+            NBTIO.writeGZIPCompressed(root, new FileOutputStream(output));
             System.out.println("✓ Write completed!");
-
-        } catch (Exception e) {
-            System.err.println("✗ Failed to write " + outputFile + ": " + e.getMessage());
-            e.printStackTrace();
-            return;
+        } catch (IOException e) {
+            System.err.println("✗ Failed to write " + output.getName() + ": " + e.getMessage());
+            throw new RuntimeException(e);
         }
 
-        verifyWrittenFile(outputFile);
+        verifyWrittenFile(output);
         System.out.println("\n=== PROCESS FINISHED ===");
     }
 }
