@@ -24,19 +24,20 @@ public class Main {
      */
     @SneakyThrows
     protected static void checkFolder(File folder, CompoundTag root) {
-        CompoundTag tag = new CompoundTag();
+        CompoundTag tag = root.getCompound(folder.getName().split("\\.")[0]);
         if(folder.isDirectory()) {
             for(File file : Objects.requireNonNull(folder.listFiles())) {
                 checkFolder(file, tag);
             }
         } else {
             if(folder.getName().endsWith(".nbt")) {
+                CompoundTag object = new CompoundTag();
                 CompoundTag javaTag = NBTIO.readCompressed(new FileInputStream(folder));
                 JeStructure structure = JeStructure.fromNbt(javaTag);
                 int x = structure.getSizeX();
                 int y = structure.getSizeY();
                 int z = structure.getSizeZ();
-                tag.putIntArray("size", new int[] {x, y, z});
+                object.putIntArray("size", new int[] {x, y, z});
                 List<Integer> palette = new ArrayList<>();
                 byte[] blocks = new byte[x*y*z];
                 ListTag<CompoundTag> jigsaw = new ListTag<>();
@@ -49,7 +50,6 @@ public class Main {
                             if(folder.getName().contains("plains_fountain_01")) System.out.println(nbt);
                             nbt.putIntArray("pos", new int[] {instance.x, instance.y, instance.z});
                             nbt.remove("id");
-                            nbt.remove("joint");
                             BlockState state = MappingRegistries.BLOCKS.getPNXBlock(new JeBlockState(nbt.getString("final_state")));
                             if(state == null) {
                                 Block block1 = Registries.BLOCK.get(nbt.getString("final_state"));
@@ -72,9 +72,10 @@ public class Main {
                 for(int i = 0; i < palette.size(); i++) {
                     paletteTag.add(i, new IntTag(palette.get(i)));
                 }
-                tag.putList("palette", paletteTag);
-                tag.putByteArray("blocks", blocks);
-                if(jigsaw.size() > 0) tag.putList("jigsaw", jigsaw);
+                object.putList("palette", paletteTag);
+                object.putByteArray("blocks", blocks);
+                if(jigsaw.size() > 0) object.putList("jigsaw", jigsaw);
+                tag.putCompound("object", object);
             } else System.err.println(folder.getName() + " is not an NBT file!");
         }
         root.putCompound(folder.getName().split("\\.")[0], tag);
