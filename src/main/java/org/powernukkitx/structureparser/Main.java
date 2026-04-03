@@ -31,13 +31,12 @@ public class Main {
             }
         } else {
             if(folder.getName().endsWith(".nbt")) {
-                CompoundTag object = new CompoundTag();
                 CompoundTag javaTag = NBTIO.readCompressed(new FileInputStream(folder));
                 JeStructure structure = JeStructure.fromNbt(javaTag);
                 int x = structure.getSizeX();
                 int y = structure.getSizeY();
                 int z = structure.getSizeZ();
-                object.putIntArray("size", new int[] {x, y, z});
+                tag.putIntArray("size", new int[] {x, y, z});
                 List<Integer> palette = new ArrayList<>();
                 byte[] blocks = new byte[x*y*z];
                 ListTag<CompoundTag> jigsaw = new ListTag<>();
@@ -47,7 +46,6 @@ public class Main {
                     if(!block.compoundTag.isEmpty()) {
                         if(block.compoundTag.getString("id").equals("minecraft:jigsaw")) {
                             CompoundTag nbt = block.compoundTag.copy();
-                            if(folder.getName().contains("plains_fountain_01")) System.out.println(nbt);
                             nbt.putIntArray("pos", new int[] {instance.x, instance.y, instance.z});
                             nbt.remove("id");
                             BlockState state = MappingRegistries.BLOCKS.getPNXBlock(new JeBlockState(nbt.getString("final_state")));
@@ -72,10 +70,9 @@ public class Main {
                 for(int i = 0; i < palette.size(); i++) {
                     paletteTag.add(i, new IntTag(palette.get(i)));
                 }
-                object.putList("palette", paletteTag);
-                object.putByteArray("blocks", blocks);
-                if(jigsaw.size() > 0) object.putList("jigsaw", jigsaw);
-                tag.putCompound("object", object);
+                tag.putList("palette", paletteTag);
+                tag.putByteArray("blocks", blocks);
+                if(jigsaw.size() > 0) tag.putList("jigsaw", jigsaw);
             } else System.err.println(folder.getName() + " is not an NBT file!");
         }
         root.putCompound(folder.getName().split("\\.")[0], tag);
