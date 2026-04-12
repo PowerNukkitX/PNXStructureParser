@@ -31,12 +31,13 @@ public class Main {
             }
         } else {
             if(folder.getName().endsWith(".nbt")) {
+                CompoundTag object = new CompoundTag();
                 CompoundTag javaTag = NBTIO.readCompressed(new FileInputStream(folder));
                 JeStructure structure = JeStructure.fromNbt(javaTag);
                 int x = structure.getSizeX();
                 int y = structure.getSizeY();
                 int z = structure.getSizeZ();
-                tag.putIntArray("size", new int[] {x, y, z});
+                object.putIntArray("size", new int[] {x, y, z});
                 List<Integer> palette = new ArrayList<>();
                 byte[] blocks = new byte[x*y*z];
                 ListTag<CompoundTag> jigsaw = new ListTag<>();
@@ -70,9 +71,10 @@ public class Main {
                 for(int i = 0; i < palette.size(); i++) {
                     paletteTag.add(i, new IntTag(palette.get(i)));
                 }
-                tag.putList("palette", paletteTag);
-                tag.putByteArray("blocks", blocks);
-                if(jigsaw.size() > 0) tag.putList("jigsaw", jigsaw);
+                object.putList("palette", paletteTag);
+                object.putByteArray("blocks", blocks);
+                if(jigsaw.size() > 0) object.putList("jigsaw", jigsaw);
+                tag.putCompound("object", object);
             } else System.err.println(folder.getName() + " is not an NBT file!");
         }
         root.putCompound(folder.getName().split("\\.")[0], tag);
