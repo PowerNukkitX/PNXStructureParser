@@ -4,13 +4,16 @@ import cn.nukkit.block.Block;
 import cn.nukkit.block.BlockState;
 import cn.nukkit.block.BlockUnknown;
 import cn.nukkit.level.structure.JeStructure;
-import cn.nukkit.nbt.NBTIO;
 import cn.nukkit.nbt.tag.*;
 import cn.nukkit.registry.Registries;
 import cn.nukkit.registry.mappings.JeBlockState;
 import cn.nukkit.registry.mappings.MappingRegistries;
 import cn.nukkit.registry.mappings.populator.BlockRegistryPopulator;
 import lombok.SneakyThrows;
+import org.cloudburstmc.nbt.NBTInputStream;
+import org.cloudburstmc.nbt.NBTOutputStream;
+import org.cloudburstmc.nbt.NbtMap;
+import org.cloudburstmc.nbt.NbtUtils;
 
 import java.io.*;
 import java.util.ArrayList;
@@ -32,49 +35,55 @@ public class Main {
         } else {
             if(folder.getName().endsWith(".nbt")) {
                 CompoundTag object = new CompoundTag();
-                CompoundTag javaTag = NBTIO.readCompressed(new FileInputStream(folder));
-                JeStructure structure = JeStructure.fromNbt(javaTag);
-                int x = structure.getSizeX();
-                int y = structure.getSizeY();
-                int z = structure.getSizeZ();
-                object.putIntArray("size", new int[] {x, y, z});
-                List<Integer> palette = new ArrayList<>();
-                byte[] blocks = new byte[x*y*z];
-                ListTag<CompoundTag> jigsaw = new ListTag<>();
-                for(JeStructure.StructureBlockInstance instance : structure.getBlockInstances()) {
-                    JeStructure.StructureBlocks block = instance.block;
-                    int hash = block.state.blockStateHash();
-                    if(!block.compoundTag.isEmpty()) {
-                        if(block.compoundTag.getString("id").equals("minecraft:jigsaw")) {
-                            CompoundTag nbt = block.compoundTag.copy();
-                            nbt.putIntArray("pos", new int[] {instance.x, instance.y, instance.z});
-                            nbt.remove("id");
-                            BlockState state = MappingRegistries.BLOCKS.getPNXBlock(new JeBlockState(nbt.getString("final_state")));
-                            if(state == null) {
-                                Block block1 = Registries.BLOCK.get(nbt.getString("final_state"));
-                                if(block1 != null) state = block1.getBlockState();
-                            };
-                            if(state == null) state = BlockUnknown.PROPERTIES.getDefaultState();
-                            nbt.putInt("final_state", state.blockStateHash());
-                            jigsaw.add(nbt);
+                try (FileInputStream fis = new FileInputStream(folder);
+                     NBTInputStream stream = NbtUtils.createGZIPReader(fis)) {
+                    CompoundTag javaTag = CompoundTag.fromNetwork((NbtMap) stream.readTag());
+                    JeStructure structure = JeStructure.fromNbt(javaTag);
+                    int x = structure.getSizeX();
+                    int y = structure.getSizeY();
+                    int z = structure.getSizeZ();
+                    object.putIntArray("size", new int[]{x, y, z});
+                    List<Integer> palette = new ArrayList<>();
+                    byte[] blocks = new byte[x * y * z];
+                    ListTag<CompoundTag> jigsaw = new ListTag<>();
+                    for (JeStructure.StructureBlockInstance instance : structure.getBlockInstances()) {
+                        JeStructure.StructureBlocks block = instance.block;
+                        int hash = block.state.blockStateHash();
+                        if (!block.compoundTag.isEmpty()) {
+                            if (block.compoundTag.getString("id").equals("minecraft:jigsaw")) {
+                                CompoundTag nbt = block.compoundTag.copy();
+                                nbt.putIntArray("pos", new int[]{instance.x, instance.y, instance.z});
+                                nbt.remove("id");
+                                BlockState state = MappingRegistries.BLOCKS.getPNXBlock(new JeBlockState(nbt.getString("final_state")));
+                                if (state == null) {
+                                    Block block1 = Registries.BLOCK.get(nbt.getString("final_state"));
+                                    if (block1 != null) state = block1.getBlockState();
+                                }
+                                ;
+                                if (state == null) state = BlockUnknown.PROPERTIES.getDefaultState();
+                                nbt.putInt("final_state", state.blockStateHash());
+                                jigsaw.add(nbt);
+                            }
                         }
+                        if (!palette.contains(hash)) palette.add(hash);
+                        int idx = palette.indexOf(hash);
+                        int index = instance.x + (instance.y * x) + (instance.z * x * y);
+                        blocks[index] = (byte) (idx + 1);
                     }
-                    if(!palette.contains(hash)) palette.add(hash);
-                    int idx = palette.indexOf(hash);
-                    int index = instance.x + (instance.y * x) + (instance.z * x * y);
-                    blocks[index] = (byte) (idx + 1);
+                    if (palette.size() > 127) {
+                        System.out.println("PALETTE BIGGER THAN 127");
+                    }
+                    ListTag<IntTag> paletteTag = new ListTag<>(Tag.TAG_Int);
+                    for (int i = 0; i < palette.size(); i++) {
+                        paletteTag.add(i, new IntTag(palette.get(i)));
+                    }
+                    object.putList("palette", paletteTag);
+                    object.putByteArray("blocks", blocks);
+                    if (jigsaw.size() > 0) object.putList("jigsaw", jigsaw);
+                    tag.putCompound("object", object);
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
                 }
-                if(palette.size() > 127) {
-                    System.out.println("PALETTE BIGGER THAN 127");
-                }
-                ListTag<IntTag> paletteTag = new ListTag<>(Tag.TAG_Int);
-                for(int i = 0; i < palette.size(); i++) {
-                    paletteTag.add(i, new IntTag(palette.get(i)));
-                }
-                object.putList("palette", paletteTag);
-                object.putByteArray("blocks", blocks);
-                if(jigsaw.size() > 0) object.putList("jigsaw", jigsaw);
-                tag.putCompound("object", object);
             } else System.err.println(folder.getName() + " is not an NBT file!");
         }
         root.putCompound(folder.getName().split("\\.")[0], tag);
@@ -91,8 +100,9 @@ public class Main {
 
         System.out.println("File exists. Size: " + file.length() + " bytes");
 
-        try (FileInputStream fis = new FileInputStream(file)) {
-            CompoundTag readBack = NBTIO.readCompressed(fis);
+        try (FileInputStream fis = new FileInputStream(file);
+        NBTInputStream stream = NbtUtils.createGZIPReader(fis)) {
+            CompoundTag readBack = CompoundTag.fromNetwork((NbtMap) stream.readTag());
             System.out.println("✓ File successfully read back!");
             System.out.println("Structures found in file: " + readBack.getAllTags().size());
             return true;
@@ -137,8 +147,11 @@ public class Main {
         File output = new File("structures.nbt");
         try {
             if(output.exists()) output.createNewFile();
-            NBTIO.writeGZIPCompressed(root, new FileOutputStream(output));
-            System.out.println("✓ Write completed!");
+            try (FileOutputStream fos = new FileOutputStream(output);
+                 NBTOutputStream stream = NbtUtils.createGZIPWriter(fos)) {
+                stream.writeTag(root.toNetwork());
+                System.out.println("✓ Write completed!");
+            }
         } catch (IOException e) {
             System.err.println("✗ Failed to write " + output.getName() + ": " + e.getMessage());
             throw new RuntimeException(e);
