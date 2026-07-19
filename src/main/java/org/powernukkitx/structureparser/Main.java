@@ -1,14 +1,14 @@
 package org.powernukkitx.structureparser;
 
-import cn.nukkit.block.Block;
-import cn.nukkit.block.BlockState;
-import cn.nukkit.block.BlockUnknown;
-import cn.nukkit.level.structure.JeStructure;
-import cn.nukkit.nbt.tag.*;
-import cn.nukkit.registry.Registries;
-import cn.nukkit.registry.mappings.JeBlockState;
-import cn.nukkit.registry.mappings.MappingRegistries;
-import cn.nukkit.registry.mappings.populator.BlockRegistryPopulator;
+import org.powernukkitx.block.Block;
+import org.powernukkitx.block.BlockState;
+import org.powernukkitx.block.BlockUnknown;
+import org.powernukkitx.level.structure.JeStructure;
+import org.powernukkitx.nbt.tag.*;
+import org.powernukkitx.registry.Registries;
+import org.powernukkitx.registry.mappings.JeBlockState;
+import org.powernukkitx.registry.mappings.MappingRegistries;
+import org.powernukkitx.registry.mappings.populator.BlockRegistryPopulator;
 import lombok.SneakyThrows;
 import org.cloudburstmc.nbt.NBTInputStream;
 import org.cloudburstmc.nbt.NBTOutputStream;

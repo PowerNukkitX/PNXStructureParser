@@ -44,7 +44,7 @@
         <dependency>
             <groupId>org.powernukkitx</groupId>
             <artifactId>server</artifactId>
-            <version>b-blockmappings-SNAPSHOT</version>
+            <version>nightly-SNAPSHOT</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
