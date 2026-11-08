@@ -1,13 +1,15 @@
 package org.powernukkitx.structureparser;
 
-import org.powernukkitx.block.Block;
+import com.hivemc.chunker.conversion.WorldConverter;
+import com.hivemc.chunker.conversion.encoding.bedrock.BedrockDataVersion;
+import com.hivemc.chunker.conversion.encoding.bedrock.base.resolver.identifier.BedrockBlockIdentifierResolver;
+import com.hivemc.chunker.conversion.encoding.java.JavaDataVersion;
+import com.hivemc.chunker.conversion.encoding.java.base.resolver.identifier.JavaBlockIdentifierResolver;
+import com.hivemc.chunker.mapping.identifier.Identifier;
 import org.powernukkitx.block.BlockState;
 import org.powernukkitx.block.BlockUnknown;
-import org.powernukkitx.level.structure.JeStructure;
 import org.powernukkitx.nbt.tag.*;
 import org.powernukkitx.registry.Registries;
-import org.powernukkitx.registry.mappings.JeBlockState;
-import org.powernukkitx.registry.mappings.MappingRegistries;
 import org.powernukkitx.registry.mappings.populator.BlockRegistryPopulator;
 import lombok.SneakyThrows;
 import org.cloudburstmc.nbt.NBTInputStream;
@@ -16,11 +18,86 @@ import org.cloudburstmc.nbt.NbtMap;
 import org.cloudburstmc.nbt.NbtUtils;
 
 import java.io.*;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Objects;
+import java.util.*;
 
 public class Main {
+
+    private static final WorldConverter CHUNKER = new WorldConverter(UUID.randomUUID());
+    private static final Map<String, List<BlockState>> BEDROCK_STATES = new HashMap<>();
+
+    private static void indexBedrockStates() {
+        BEDROCK_STATES.clear();
+        for (BlockState state : Registries.BLOCKSTATE.getAllState()) {
+            BEDROCK_STATES.computeIfAbsent(state.getIdentifier(), ignored -> new ArrayList<>()).add(state);
+        }
+    }
+
+    private static Object normalizeStateValue(Object value) {
+        if (value instanceof Boolean bool) return bool ? 1L : 0L;
+        if (value instanceof Number number) return number.longValue();
+        return value;
+    }
+
+    private static BlockState toPnxBlockState(
+            Identifier javaIdentifier,
+            JavaBlockIdentifierResolver javaResolver,
+            BedrockBlockIdentifierResolver bedrockResolver
+    ) {
+        var chunkerState = javaResolver.to(javaIdentifier)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Unknown Java block state: " + javaIdentifier.toStateString()));
+        Identifier bedrockIdentifier = bedrockResolver.from(chunkerState)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "No Bedrock mapping for: " + javaIdentifier.toStateString()));
+
+        List<BlockState> candidates = BEDROCK_STATES.getOrDefault(
+                bedrockIdentifier.getIdentifier(), Collections.emptyList());
+        for (BlockState candidate : candidates) {
+            NbtMap states = candidate.getBlockStateTag().getCompound("states");
+            boolean matches = true;
+            for (Map.Entry<String, Object> entry : bedrockIdentifier.getBoxedStates().entrySet()) {
+                // In Bedrock, waterlogging is represented by a second block layer.
+                if (entry.getKey().equals("waterlogged")) continue;
+                if (!states.containsKey(entry.getKey()) || !Objects.equals(
+                        normalizeStateValue(states.get(entry.getKey())),
+                        normalizeStateValue(entry.getValue()))) {
+                    matches = false;
+                    break;
+                }
+            }
+            if (matches) return candidate;
+        }
+
+        throw new IllegalArgumentException(
+                "No PNX block state for Bedrock state: " + bedrockIdentifier.toStateString());
+    }
+
+    private static Identifier readPaletteEntry(CompoundTag paletteEntry) {
+        Map<String, Object> properties = new HashMap<>();
+        String propertiesKey = paletteEntry.containsCompound("properties") ? "properties" : "Properties";
+        if (paletteEntry.containsCompound(propertiesKey)) {
+            properties.putAll(paletteEntry.getCompound(propertiesKey).parseValue());
+        }
+        String identifier = paletteEntry.containsString("id")
+                ? paletteEntry.getString("id")
+                : paletteEntry.getString("Name");
+        return Identifier.fromBoxed(identifier, properties);
+    }
+
+    private static Identifier parseJavaBlockState(String value) {
+        int bracket = value.indexOf('[');
+        if (bracket < 0) return new Identifier(value);
+
+        Map<String, Object> properties = new HashMap<>();
+        String attributes = value.substring(bracket + 1, value.length() - 1);
+        if (!attributes.isBlank()) {
+            for (String attribute : attributes.split(",")) {
+                String[] parts = attribute.split("=", 2);
+                if (parts.length == 2) properties.put(parts[0], parts[1]);
+            }
+        }
+        return Identifier.fromBoxed(value.substring(0, bracket), properties);
+    }
 
     /**
      * Recursively scans the folder and writes each NBT file into a nested CompoundTag.
@@ -38,37 +115,67 @@ public class Main {
                 try (FileInputStream fis = new FileInputStream(folder);
                      NBTInputStream stream = NbtUtils.createGZIPReader(fis)) {
                     CompoundTag javaTag = CompoundTag.fromNetwork((NbtMap) stream.readTag());
-                    JeStructure structure = JeStructure.fromNbt(javaTag);
-                    int x = structure.getSizeX();
-                    int y = structure.getSizeY();
-                    int z = structure.getSizeZ();
+                    ListTag<IntTag> size = javaTag.getList("size", IntTag.class);
+                    int x = size.get(0).data;
+                    int y = size.get(1).data;
+                    int z = size.get(2).data;
                     object.putIntArray("size", new int[]{x, y, z});
+
+                    JavaDataVersion javaVersion = JavaDataVersion.getNearestVersion(javaTag.getInt("DataVersion"));
+                    JavaBlockIdentifierResolver javaResolver = new JavaBlockIdentifierResolver(
+                            CHUNKER, javaVersion.getVersion(), false, false);
+                    BedrockBlockIdentifierResolver bedrockResolver = new BedrockBlockIdentifierResolver(
+                            CHUNKER, BedrockDataVersion.latest().getVersion(), false, false);
+
+                    ListTag<CompoundTag> javaPalette;
+                    if (javaTag.containsList("palette")) {
+                        javaPalette = javaTag.getList("palette", CompoundTag.class);
+                    } else {
+                        ListTag<? extends Tag> palettes = javaTag.getList("palettes");
+                        if (palettes.size() == 0 || !(palettes.get(0) instanceof ListTag<?> firstPalette)) {
+                            throw new IllegalArgumentException("Structure has no palette");
+                        }
+                        @SuppressWarnings("unchecked")
+                        ListTag<CompoundTag> selectedPalette = (ListTag<CompoundTag>) firstPalette;
+                        javaPalette = selectedPalette;
+                    }
                     List<Integer> palette = new ArrayList<>();
+                    int[] paletteMapping = new int[javaPalette.size()];
+                    for (int i = 0; i < javaPalette.size(); i++) {
+                        int hash = toPnxBlockState(
+                                readPaletteEntry(javaPalette.get(i)), javaResolver, bedrockResolver).blockStateHash();
+                        if (!palette.contains(hash)) palette.add(hash);
+                        paletteMapping[i] = palette.indexOf(hash);
+                    }
+
                     byte[] blocks = new byte[x * y * z];
                     ListTag<CompoundTag> jigsaw = new ListTag<>();
-                    for (JeStructure.StructureBlockInstance instance : structure.getBlockInstances()) {
-                        JeStructure.StructureBlocks block = instance.block;
-                        int hash = block.state.blockStateHash();
-                        if (!block.compoundTag.isEmpty()) {
-                            if (block.compoundTag.getString("id").equals("minecraft:jigsaw")) {
-                                CompoundTag nbt = block.compoundTag.copy();
-                                nbt.putIntArray("pos", new int[]{instance.x, instance.y, instance.z});
+                    for (CompoundTag block : javaTag.getList("blocks", CompoundTag.class).getAll()) {
+                        ListTag<IntTag> pos = block.getList("pos", IntTag.class);
+                        int blockX = pos.get(0).data;
+                        int blockY = pos.get(1).data;
+                        int blockZ = pos.get(2).data;
+                        int sourceState = block.getInt("state");
+
+                        if (block.containsCompound("nbt")) {
+                            CompoundTag blockNbt = block.getCompound("nbt");
+                            if (blockNbt.getString("id").equals("minecraft:jigsaw")) {
+                                CompoundTag nbt = blockNbt.copy();
+                                nbt.putIntArray("pos", new int[]{blockX, blockY, blockZ});
                                 nbt.remove("id");
-                                BlockState state = MappingRegistries.BLOCKS.getPNXBlock(new JeBlockState(nbt.getString("final_state")));
-                                if (state == null) {
-                                    Block block1 = Registries.BLOCK.get(nbt.getString("final_state"));
-                                    if (block1 != null) state = block1.getBlockState();
+                                BlockState state;
+                                try {
+                                    state = toPnxBlockState(parseJavaBlockState(nbt.getString("final_state")),
+                                            javaResolver, bedrockResolver);
+                                } catch (IllegalArgumentException exception) {
+                                    state = BlockUnknown.PROPERTIES.getDefaultState();
                                 }
-                                ;
-                                if (state == null) state = BlockUnknown.PROPERTIES.getDefaultState();
                                 nbt.putInt("final_state", state.blockStateHash());
                                 jigsaw.add(nbt);
                             }
                         }
-                        if (!palette.contains(hash)) palette.add(hash);
-                        int idx = palette.indexOf(hash);
-                        int index = instance.x + (instance.y * x) + (instance.z * x * y);
-                        blocks[index] = (byte) (idx + 1);
+                        int index = blockX + (blockY * x) + (blockZ * x * y);
+                        blocks[index] = (byte) (paletteMapping[sourceState] + 1);
                     }
                     if (palette.size() > 127) {
                         System.out.println("PALETTE BIGGER THAN 127");
@@ -82,7 +189,7 @@ public class Main {
                     if (jigsaw.size() > 0) object.putList("jigsaw", jigsaw);
                     tag.putCompound("object", object);
                 } catch (Exception e) {
-                    throw new RuntimeException(e);
+                    throw new RuntimeException("Failed to convert " + folder.getPath(), e);
                 }
             } else System.err.println(folder.getName() + " is not an NBT file!");
         }
@@ -132,6 +239,7 @@ public class Main {
         Registries.BLOCK.init();
         Registries.BLOCKSTATE.init();
         BlockRegistryPopulator.initMapping();
+        indexBedrockStates();
 
         System.out.println("=== SCANNING DIRECTORY: " + baseDir.getAbsolutePath() + " ===");
         CompoundTag root = new CompoundTag();

@@ -9,8 +9,8 @@
     <version>1.0-SNAPSHOT</version>
 
     <properties>
-        <maven.compiler.source>21</maven.compiler.source>
-        <maven.compiler.target>21</maven.compiler.target>
+        <maven.compiler.source>25</maven.compiler.source>
+        <maven.compiler.target>25</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     </properties>
 
@@ -58,6 +58,13 @@
             <artifactId>bedrock-connection</artifactId>
             <version>3.0.0.Beta7-Debug-SNAPSHOT</version>
             <scope>compile</scope>
+        </dependency>
+        <dependency>
+            <groupId>com.hivemc.chunker</groupId>
+            <artifactId>chunker-cli</artifactId>
+            <version>1.21.0</version>
+            <scope>system</scope>
+            <systemPath>${project.basedir}/libs/chunker-cli-1.21.0.jar</systemPath>
         </dependency>
 
         <dependency>
